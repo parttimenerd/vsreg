@@ -1,0 +1,26 @@
+{
+  "name": "$NAME",
+  "type": "cppdbg",
+  "request": "launch",
+  "program": "",
+  "args": [],
+  "stopAtEntry": false,
+  "cwd": "",
+  "environment": [],
+  "externalConsole": false,
+  "MIMode": "gdb",
+  "miDebuggerPath": "/usr/bin/gdb",
+  "subProcess": true,
+  "setupCommands": [
+    {
+      "description": "Enable pretty-printing for gdb",
+      "text": "-enable-pretty-printing",
+      "ignoreFailures": true
+    },
+    {   "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
+        "text": "-gdb-set follow-fork-mode child",
+        "ignoreFailures": true
+    }
+  ],
+  "preLaunchTask": ""
+}
