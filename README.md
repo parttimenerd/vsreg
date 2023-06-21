@@ -50,7 +50,6 @@ The default template looks like this:
   "externalConsole": false,
   "MIMode": "gdb",
   "miDebuggerPath": "/usr/bin/gdb",
-  "subProcess": true,
   "setupCommands": [
     {
       "description": "Enable pretty-printing for gdb",
