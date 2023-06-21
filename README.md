@@ -9,11 +9,11 @@ and vsreg updates the `launch.json` file for you:
 
 ```sh
 git clone https://github.com/parttimenerd/vsreg
-vsreg/vsreg.py "ASGCT" -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
+vsreg/vsreg.py "ASGCT debug" -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
 ```
 
 ... and you can start debugging with VSCode, recompile your tests with `make test-image`.
-You can add a task to your `tasks.json` file and passe the label to the ``:
+You can add a task to your `tasks.json` file and pass the label to the `--build-task` option:
 
 ```json
 {
@@ -31,7 +31,7 @@ You can add a task to your `tasks.json` file and passe the label to the ``:
 To try vsreg without modifying your `launch.json` file, you can use the `--dry-run` option:
 
 ```sh
-./vsreg.py "ASGCT" --dry-run -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
+./vsreg.py "ASGCT debug" --dry-run -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
 ```
 
 The tool fills the passed template (default `gdb`) which can be configured with the `--template` option.
@@ -57,9 +57,10 @@ The default template looks like this:
       "text": "-enable-pretty-printing",
       "ignoreFailures": true
     },
-    {   "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
-        "text": "-gdb-set follow-fork-mode child",
-        "ignoreFailures": true
+    {
+      "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
+      "text": "-gdb-set follow-fork-mode child",
+      "ignoreFailures": true
     }
   ],
   "preLaunchTask": ""
@@ -67,6 +68,10 @@ The default template looks like this:
 ```
 
 Please be aware that only single tests are supported, not test suites.
+
+You learn a tiny bit more on this tool in my blog post
+[Debugging OpenJDK Tests in VSCode Without Losing Your Mind](https://mostlynerdless.de/blog/2023/06/21/debugging-openjdk-tests-in-vscode-without-losing-your-mind/)
+in which I introduced this tool.
 
 Options
 -------

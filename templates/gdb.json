@@ -17,9 +17,10 @@
       "text": "-enable-pretty-printing",
       "ignoreFailures": true
     },
-    {   "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
-        "text": "-gdb-set follow-fork-mode child",
-        "ignoreFailures": true
+    {
+      "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
+      "text": "-gdb-set follow-fork-mode child",
+      "ignoreFailures": true
     }
   ],
   "preLaunchTask": ""

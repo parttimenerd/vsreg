@@ -75,12 +75,13 @@ class CommandResult:
 
 def run_command(command: List[str]) -> CommandResult:
     assert "make" in command, "make not found in command"
-    env_vars = {parts[0]:parts[1] for env in command[0:command.index("make")] if len(parts := env.split("=", 2)) == 2}
+    env_vars = {parts[0]: parts[1] for env in command[0:command.index("make")] if len(parts := env.split("=", 2)) == 2}
     environ = dict(os.environ)
     environ.update(env_vars)
     out = subprocess.run(shlex.join(command), shell=True, env=environ, capture_output=True).stdout.decode("utf-8")
 
     return CommandResult(out, env_vars)
+
 
 def parse(command_out: CommandResult) -> Parsed:
     parts = command_out.stdout.split("rerun:\ncd")
