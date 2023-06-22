@@ -12,7 +12,7 @@ git clone https://github.com/parttimenerd/vsreg
 vsreg/vsreg.py "ASGCT debug" -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
 ```
 
-... and you can start debugging with VSCode, recompile your tests with `make test-image`.
+... and you can start debugging with VSCode, recompile your tests with `make images test-image`.
 You can add a task to your `tasks.json` file and pass the label to the `--build-task` option:
 
 ```json
@@ -23,7 +23,7 @@ You can add a task to your `tasks.json` file and pass the label to the `--build-
       "cwd": "${workspaceFolder}"
   },
   "command": "/usr/bin/gmake",
-  "args": ["test-image"],
+  "args": ["images", "test-image"],
   "problemMatcher": ["$gcc"]
 }
 ```
