@@ -9,8 +9,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from pprint import pprint
 from typing import Any, Dict, List, Optional
+import shutil
 
 VSREG_FOLDER = Path(__file__).parent
 CUR_FOLDER = Path.cwd()
@@ -138,6 +138,37 @@ def create_launch_config(label: str, parsed: Parsed, template: str, build_task: 
     return LaunchConfig(template_json)
 
 
+def parse_raw_command(cmd: List[str]) -> Parsed:
+    cwd = Path.cwd()
+    split_idx = next(i for i, arg in enumerate(cmd) if arg.islower())
+    env_args = cmd[:split_idx]
+    program_args = cmd[split_idx:]
+    env: Dict[str, str] = {parts[0]: shlex.split(parts[1])[0] for arg in env_args if
+                           len(parts := arg.split("=", 2)) == 2}
+    env.update(os.environ)
+    program, *args = program_args
+    if not program.startswith("/") and not program.startswith("."):
+        program = shutil.which(program, path=env["PATH"])
+    return Parsed(str(cwd), env, program, args)
+
+
+def create_raw_launch_config(label: str, cmd: List[str], template: str, build_task: Optional[str]) -> LaunchConfig:
+    parsed = parse_raw_command(cmd)
+    template_json = load_template(template)
+    if "$NAME" in template_json["name"]:
+        template_json["name"] = template_json["name"].replace("$NAME", label)
+    else:
+        template_json["name"] = label
+    template_json["cwd"] = parsed.cwd
+    template_json["environment"] = [{"name": name, "value": value} for name, value in
+                                    sorted(parsed.env.items(), key=lambda x: x[0])]
+    template_json["program"] = parsed.program
+    template_json["args"] = parsed.args
+    if build_task:
+        template_json["preLaunchTask"] = build_task
+    return LaunchConfig(template_json)
+
+
 if __name__ == '__main__':
     # source https://groups.google.com/g/argparse-users/c/LazV_tEQvQw/m/xJhBOm1qS5IJ
     class MyParser(argparse.ArgumentParser):
@@ -147,18 +178,24 @@ if __name__ == '__main__':
             sys.exit(2)
 
 
-    parser = MyParser(description='Create a debug launch config for a JTREG test run')
+    parser = MyParser(description='Create a debug launch config for a JTREG test run or a command execution')
     parser.add_argument('label', metavar='LABEL', type=str, help='Label of the config')
     parser.add_argument('-t', '--template', metavar='TEMPLATE', type=str,
                         help='Template to use for the launch config, or name of file without suffix in vsreg/template folder',
                         required=False, default='gdb')
     parser.add_argument('-d', '--dry-run', action='store_true', help='Only print the launch config', required=False)
+    parser.add_argument('-r', '--raw', action='store_true',
+                        help='Use raw command without execution, chosen automatically if "make" not found in command',
+                        required=False)
     parser.add_argument('-b', '--build-task', metavar='TASK', type=str, help='Task to run before the command',
                         required=False)
     parser.add_argument('command', metavar='COMMAND', type=str, nargs='+', help='Command to run')
     args = parser.parse_args()
-    parsed = parse(run_command(args.command))
-    launch_config = create_launch_config(args.label, parsed, args.template, args.build_task)
+    if args.raw or "make" not in args.command:
+        launch_config = create_raw_launch_config(args.label, args.command, args.template, args.build_task)
+    else:
+        parsed = parse(run_command(args.command))
+        launch_config = create_launch_config(args.label, parsed, args.template, args.build_task)
     if args.dry_run:
         print(json.dumps(launch_config.data, indent=2))
     else:

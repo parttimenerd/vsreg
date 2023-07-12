@@ -2,7 +2,7 @@ vsreg
 =====
 
 Debugging JTREG tests with VSCode is difficult, you have to write the launch.json file by hand.
-But worry no more: This small utility will do this for you :)
+But worry no more: This small utility will do this for you :) _And it supports regular commands too._
 
 Just pass the make test command to it (with `JTREG="VERBOSE=all"`) with a test label,
 and vsreg updates the `launch.json` file for you:
@@ -33,6 +33,16 @@ To try vsreg without modifying your `launch.json` file, you can use the `--dry-r
 ```sh
 ./vsreg.py "ASGCT debug" --dry-run -- make test TEST=jtreg:test/hotspot/jtreg/serviceability/AsyncGetCallTrace JTREG="VERBOSE=all"
 ```
+
+For regular commands like `java Example.java`, just pass the command to `vsreg`:
+
+```sh
+./vsreg.py "Example" -- java Example.java
+```
+
+This is helpful for debugging native code like Java agents or even code which is unrelated to the OpenJDK.
+
+## Templates
 
 The tool fills the passed template (default `gdb`) which can be configured with the `--template` option.
 The default template looks like this:
@@ -75,9 +85,9 @@ in which I introduced this tool.
 Options
 -------
 ```shell
-usage: vsreg.py [-h] [-t TEMPLATE] [-d] [-b TASK] LABEL COMMAND [COMMAND ...]
+usage: vsreg.py [-h] [-t TEMPLATE] [-d] [-r] [-b TASK] LABEL COMMAND [COMMAND ...]
 
-Create a debug launch config for a JTREG test run
+Create a debug launch config for a JTREG test run or a command execution
 
 positional arguments:
   LABEL                 Label of the config
@@ -86,9 +96,9 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -t TEMPLATE, --template TEMPLATE
-                        Template to use for the launch config, or name of file
-                        without suffix in vsreg/template folder
+                        Template to use for the launch config, or name of file without suffix in vsreg/template folder
   -d, --dry-run         Only print the launch config
+  -r, --raw             Use raw command without execution, chosen automatically if "make" not found in command
   -b TASK, --build-task TASK
                         Task to run before the command
 ```
