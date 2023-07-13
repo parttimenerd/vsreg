@@ -8,8 +8,8 @@
   "cwd": "",
   "environment": [],
   "externalConsole": false,
-  "MIMode": "gdb",
-  "miDebuggerPath": "/usr/bin/gdb",
+  "MIMode": "lldb",
+  "targetArchitecture": "$ARCH",
   "setupCommands": [
     {
       "description": "Enable pretty-printing for gdb",
@@ -18,7 +18,7 @@
     },
     {
       "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
-      "text": "-gdb-set follow-fork-mode child",
+      "text": "settings set target.process.follow-fork-mode child",
       "ignoreFailures": true
     }
   ],

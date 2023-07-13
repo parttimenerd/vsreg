@@ -44,7 +44,7 @@ This is helpful for debugging native code like Java agents or even code which is
 
 ## Templates
 
-The tool fills the passed template (default `gdb`) which can be configured with the `--template` option.
+The tool fills the passed template (default `default`) which can be configured with the `--template` option.
 The default template looks like this:
 
 ```json
@@ -58,20 +58,24 @@ The default template looks like this:
   "cwd": "",
   "environment": [],
   "externalConsole": false,
-  "MIMode": "gdb",
-  "miDebuggerPath": "/usr/bin/gdb",
-  "setupCommands": [
-    {
-      "description": "Enable pretty-printing for gdb",
-      "text": "-enable-pretty-printing",
-      "ignoreFailures": true
-    },
-    {
-      "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
-      "text": "-gdb-set follow-fork-mode child",
-      "ignoreFailures": true
-    }
-  ],
+  "linux": {
+    "MIMode": "gdb",
+    "targetArchitecture": "$ARCH",
+    "miDebuggerPath": "/usr/bin/gdb",
+    "setupCommands": [
+      {
+        "description": "Enable pretty-printing for gdb",
+        "text": "-enable-pretty-printing",
+        "ignoreFailures": true
+      },
+      {
+        "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
+        "text": "-gdb-set follow-fork-mode child",
+        "ignoreFailures": true
+      }
+    ],
+  },
+  /* ... */
   "preLaunchTask": ""
 }
 ```

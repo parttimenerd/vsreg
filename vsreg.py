@@ -3,14 +3,15 @@
 import argparse
 import json
 import os
+import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import shutil
 
 VSREG_FOLDER = Path(__file__).parent
 CUR_FOLDER = Path.cwd()
@@ -122,17 +123,30 @@ def load_template(template: str) -> Dict[str, Any]:
     return json.loads(file.read_text())
 
 
-def create_launch_config(label: str, parsed: Parsed, template: str, build_task: Optional[str]) -> LaunchConfig:
+def replace(obj: Any, token: str, replacement: str) -> Any:
+    if isinstance(obj, str):
+        return obj.replace(token, replacement)
+    if isinstance(obj, list):
+        return [replace(v, token, replacement) for v in obj]
+    if isinstance(obj, dict):
+        return {k: replace(v, token, replacement) for k, v in obj.items()}
+    return obj
+
+
+def create_launch_config(label: str, parsed: Parsed, template: str, build_task: Optional[str],
+                         jtreg: bool = True) -> LaunchConfig:
     template_json = load_template(template)
     if "$NAME" in template_json["name"]:
         template_json["name"] = template_json["name"].replace("$NAME", label)
     else:
         template_json["name"] = label
+    template_json = replace(template_json, "$NAME", label)
+    template_json = replace(template_json, "$ARCH", platform.machine().lower())
     template_json["cwd"] = parsed.cwd
     template_json["environment"] = [{"name": name, "value": value} for name, value in
                                     sorted(parsed.env.items(), key=lambda x: x[0])]
     template_json["program"] = parsed.program
-    template_json["args"] = ["-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI"] + parsed.args
+    template_json["args"] = (["-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI"] if jtreg else []) + parsed.args
     if build_task:
         template_json["preLaunchTask"] = build_task
     return LaunchConfig(template_json)
@@ -154,19 +168,7 @@ def parse_raw_command(cmd: List[str]) -> Parsed:
 
 def create_raw_launch_config(label: str, cmd: List[str], template: str, build_task: Optional[str]) -> LaunchConfig:
     parsed = parse_raw_command(cmd)
-    template_json = load_template(template)
-    if "$NAME" in template_json["name"]:
-        template_json["name"] = template_json["name"].replace("$NAME", label)
-    else:
-        template_json["name"] = label
-    template_json["cwd"] = parsed.cwd
-    template_json["environment"] = [{"name": name, "value": value} for name, value in
-                                    sorted(parsed.env.items(), key=lambda x: x[0])]
-    template_json["program"] = parsed.program
-    template_json["args"] = parsed.args
-    if build_task:
-        template_json["preLaunchTask"] = build_task
-    return LaunchConfig(template_json)
+    return create_launch_config(label, parsed, template, build_task, jtreg=False)
 
 
 if __name__ == '__main__':
@@ -182,7 +184,7 @@ if __name__ == '__main__':
     parser.add_argument('label', metavar='LABEL', type=str, help='Label of the config')
     parser.add_argument('-t', '--template', metavar='TEMPLATE', type=str,
                         help='Template to use for the launch config, or name of file without suffix in vsreg/template folder',
-                        required=False, default='gdb')
+                        required=False, default='default')
     parser.add_argument('-d', '--dry-run', action='store_true', help='Only print the launch config', required=False)
     parser.add_argument('-r', '--raw', action='store_true',
                         help='Use raw command without execution, chosen automatically if "make" not found in command',
