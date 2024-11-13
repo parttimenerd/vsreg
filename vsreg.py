@@ -99,7 +99,7 @@ def parse(command_out: CommandResult) -> Parsed:
     env: Dict[str, str] = {}
     for line in env_lines:
         line = line[:-2]
-        assert re.match(r"^[A-Z_]+=.+$", line), f"Unexpected env line: {line}"
+        assert re.match(r"^[A-Z_]+=.*$", line), f"Unexpected env line: {line}"
         key, value = line.split("=", 1)
         env[key] = value
     java_lines = lines[env_lines_length:]
