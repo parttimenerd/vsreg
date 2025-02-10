@@ -80,6 +80,8 @@ The default template looks like this:
 }
 ```
 
+_Use the `gdb_without_signal.json` template to get ignore `SIGUSR1`, `SIGUSR2`, and `SIGSEGV` signals._
+
 Please be aware that only single tests are supported, not test suites.
 
 You learn a tiny bit more on this tool in my blog post
