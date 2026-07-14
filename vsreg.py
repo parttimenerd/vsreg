@@ -156,7 +156,7 @@ def create_launch_config(label: str, parsed: Parsed, template: str, build_task: 
 
 def parse_raw_command(cmd: List[str]) -> Parsed:
     cwd = Path.cwd()
-    split_idx = next(i for i, arg in enumerate(cmd) if arg.islower())
+    split_idx = next((i for i, arg in enumerate(cmd) if not re.match(r"^[A-Z_]+=", arg)), len(cmd))
     env_args = cmd[:split_idx]
     program_args = cmd[split_idx:]
     env: Dict[str, str] = {parts[0]: shlex.split(parts[1])[0] for arg in env_args if

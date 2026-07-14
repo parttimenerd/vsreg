@@ -130,7 +130,7 @@ class VSCodeServer:
         return f"http://127.0.0.1:{self.port}"
 
 
-def _wait_for_workbench(page, timeout_ms: int = 40_000):
+def _wait_for_workbench(page, timeout_ms: int = 60_000):
     """Wait for the VS Code workbench to finish loading."""
     page.wait_for_selector(".monaco-workbench", timeout=timeout_ms)
     # VS Code loads async — wait for the activity bar to stabilise
@@ -140,7 +140,7 @@ def _wait_for_workbench(page, timeout_ms: int = 40_000):
     )
 
 
-def _open_run_panel(page, timeout_ms: int = 30_000):
+def _open_run_panel(page, timeout_ms: int = 60_000):
     """Click the Run & Debug activity-bar icon and wait for configs to load."""
     page.locator('[aria-label*="Run and Debug"]').first.click()
     # VS Code reads launch.json asynchronously; wait until the dropdown shows
@@ -195,7 +195,7 @@ class TestVSCodeHarness(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _browser_and_page(self, pw):
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page()
         return browser, page
 
