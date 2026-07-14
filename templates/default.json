@@ -22,6 +22,11 @@
         "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
         "text": "-gdb-set follow-fork-mode child",
         "ignoreFailures": true
+      },
+      {
+        "description": "Load selective SIGSEGV filter: passes safepoint faults to the JVM, stops on real crashes.",
+        "text": "source $VSREG_DIR/jvm_sigsegv.py",
+        "ignoreFailures": true
       }
     ]
   },
@@ -37,6 +42,11 @@
       {
         "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
         "text": "settings set target.process.follow-fork-mode child",
+        "ignoreFailures": true
+      },
+      {
+        "description": "Do not stop on SIGSEGV: JVM uses it internally for safepoints and null-pointer handling.",
+        "text": "process handle SIGSEGV -n false -p true -s false",
         "ignoreFailures": true
       }
     ]
@@ -54,6 +64,11 @@
       {
         "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
         "text": "-gdb-set follow-fork-mode child",
+        "ignoreFailures": true
+      },
+      {
+        "description": "Load selective SIGSEGV filter: passes safepoint faults to the JVM, stops on real crashes.",
+        "text": "source $VSREG_DIR/jvm_sigsegv.py",
         "ignoreFailures": true
       }
     ]

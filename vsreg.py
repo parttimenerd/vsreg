@@ -79,7 +79,8 @@ def run_command(command: List[str]) -> CommandResult:
     env_vars = {parts[0]: parts[1] for env in command[0:command.index("make")] if len(parts := env.split("=", 2)) == 2}
     environ = dict(os.environ)
     environ.update(env_vars)
-    out = subprocess.run(shlex.join(command), shell=True, env=environ, capture_output=True).stdout.decode("utf-8")
+    result = subprocess.run(shlex.join(command), shell=True, env=environ, capture_output=True)
+    out = result.stdout.decode("utf-8") + result.stderr.decode("utf-8")
 
     return CommandResult(out, env_vars)
 
@@ -142,6 +143,7 @@ def create_launch_config(label: str, parsed: Parsed, template: str, build_task: 
         template_json["name"] = label
     template_json = replace(template_json, "$NAME", label)
     template_json = replace(template_json, "$ARCH", platform.machine().lower())
+    template_json = replace(template_json, "$VSREG_DIR", str(VSREG_FOLDER))
     template_json["cwd"] = parsed.cwd
     template_json["environment"] = [{"name": name, "value": value} for name, value in
                                     sorted(parsed.env.items(), key=lambda x: x[0])]
