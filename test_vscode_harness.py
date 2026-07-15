@@ -257,9 +257,15 @@ class TestVSCodeHarness(unittest.TestCase):
                     _open_run_panel(page)
                     # Open the dropdown to reveal all config options
                     page.locator('[aria-label^="Debug Launch Configurations:"]').first.click()
-                    page.wait_for_selector('[role="menuitemcheckbox"]', timeout=5000)
+                    # VS Code uses menuitemcheckbox on macOS, option on Linux
+                    page.wait_for_function(
+                        "() => document.querySelector('[role=\"menuitemcheckbox\"], [role=\"option\"]') !== null",
+                        timeout=15_000,
+                    )
                     options = page.evaluate(
-                        "() => [...document.querySelectorAll('[role=\"menuitemcheckbox\"]')].map(e => e.getAttribute('aria-label'))"
+                        """() => [...document.querySelectorAll('[role="menuitemcheckbox"], [role="option"]')]
+                                .map(e => e.getAttribute('aria-label') || e.textContent.trim())
+                                .filter(Boolean)"""
                     )
                     self.assertIn("Config Alpha", options)
                     self.assertIn("Config Beta", options)
