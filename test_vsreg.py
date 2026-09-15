@@ -18,12 +18,17 @@ from vsreg import (
     LaunchConfig,
     LaunchConfigs,
     Parsed,
+    SettingsConfigs,
+    TaskConfigs,
+    build_command_task,
     create_launch_config,
     create_raw_launch_config,
+    detect_clangd_platform,
     load_template,
     parse,
     parse_raw_command,
     replace,
+    rr_replay_task,
     run_command,
 )
 
@@ -596,6 +601,295 @@ class TestCLIHarness(unittest.TestCase):
             self.assertFalse(ws.launch_json.exists())
             parsed = json.loads(result.stdout)
             self.assertEqual(parsed["name"], "x")
+
+
+# ---------------------------------------------------------------------------
+# TaskConfigs
+# ---------------------------------------------------------------------------
+
+class TestTaskConfigs(unittest.TestCase):
+
+    def test_empty_has_no_tasks(self):
+        tc = TaskConfigs.empty()
+        self.assertEqual(tc.data["tasks"], [])
+        self.assertEqual(tc.data["version"], "2.0.0")
+
+    def test_contains(self):
+        tc = TaskConfigs.empty()
+        tc.add({"label": "build", "type": "shell", "command": "make"})
+        self.assertIn("build", tc)
+        self.assertNotIn("test", tc)
+
+    def test_add_multiple(self):
+        tc = TaskConfigs.empty()
+        tc.add({"label": "a", "type": "shell", "command": "echo a"})
+        tc.add({"label": "b", "type": "shell", "command": "echo b"})
+        self.assertEqual(len(tc.data["tasks"]), 2)
+
+    def test_add_replaces_by_label(self):
+        tc = TaskConfigs.empty()
+        tc.add({"label": "build", "type": "shell", "command": "make"})
+        tc.add({"label": "build", "type": "shell", "command": "ninja"})
+        self.assertEqual(len(tc.data["tasks"]), 1)
+        self.assertEqual(tc.data["tasks"][0]["command"], "ninja")
+
+    def test_write_and_read_roundtrip(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            tc = TaskConfigs.empty()
+            tc.add({"label": "build", "type": "shell", "command": "make"})
+            tc.write(path)
+            tc2 = TaskConfigs.read(path)
+            self.assertEqual(tc2.data["tasks"][0]["label"], "build")
+        finally:
+            path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# SettingsConfigs
+# ---------------------------------------------------------------------------
+
+class TestSettingsConfigs(unittest.TestCase):
+
+    def test_empty_is_empty_dict(self):
+        sc = SettingsConfigs.empty()
+        self.assertEqual(sc.data, {})
+
+    def test_set_key(self):
+        sc = SettingsConfigs.empty()
+        sc.set("clangd.arguments", ["--foo"])
+        self.assertEqual(sc.data["clangd.arguments"], ["--foo"])
+
+    def test_set_replaces_existing(self):
+        sc = SettingsConfigs.empty()
+        sc.set("clangd.arguments", ["--old"])
+        sc.set("clangd.arguments", ["--new"])
+        self.assertEqual(sc.data["clangd.arguments"], ["--new"])
+
+    def test_set_preserves_other_keys(self):
+        sc = SettingsConfigs.empty()
+        sc.set("other.key", 42)
+        sc.set("clangd.arguments", ["--foo"])
+        self.assertEqual(sc.data["other.key"], 42)
+
+    def test_write_and_read_roundtrip(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            sc = SettingsConfigs.empty()
+            sc.set("clangd.arguments", ["--compile-commands-dir=build/linux"])
+            sc.write(path)
+            sc2 = SettingsConfigs.read(path)
+            self.assertEqual(sc2.data["clangd.arguments"], ["--compile-commands-dir=build/linux"])
+        finally:
+            path.unlink()
+
+    def test_read_merges_existing_keys(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump({"existing.key": "value"}, f)
+            path = Path(f.name)
+        try:
+            sc = SettingsConfigs.read(path)
+            sc.set("clangd.arguments", ["--foo"])
+            self.assertEqual(sc.data["existing.key"], "value")
+            self.assertEqual(sc.data["clangd.arguments"], ["--foo"])
+        finally:
+            path.unlink()
+
+
+class TestClangdDetect(unittest.TestCase):
+
+    def test_detects_single_compile_commands(self):
+        with tempfile.TemporaryDirectory() as d:
+            build_dir = Path(d) / "build" / "linux-x86_64-server-fastdebug"
+            build_dir.mkdir(parents=True)
+            (build_dir / "compile_commands.json").write_text("[]")
+            result = detect_clangd_platform(Path(d))
+            self.assertEqual(result, "build/linux-x86_64-server-fastdebug")
+
+    def test_picks_newest_when_multiple(self):
+        with tempfile.TemporaryDirectory() as d:
+            older = Path(d) / "build" / "linux-x86_64-server-debug"
+            newer = Path(d) / "build" / "linux-x86_64-server-release"
+            for p in [older, newer]:
+                p.mkdir(parents=True)
+                (p / "compile_commands.json").write_text("[]")
+            import time; time.sleep(0.05)
+            (newer / "compile_commands.json").write_text("[]")
+            result = detect_clangd_platform(Path(d))
+            self.assertEqual(result, "build/linux-x86_64-server-release")
+
+    def test_raises_when_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(FileNotFoundError):
+                detect_clangd_platform(Path(d))
+
+
+# ---------------------------------------------------------------------------
+# rr_replay_task() and build_command_task()
+# ---------------------------------------------------------------------------
+
+class TestTaskHelpers(unittest.TestCase):
+
+    def test_rr_replay_task_structure(self):
+        t = rr_replay_task("rr replay (test)", 50505)
+        self.assertEqual(t["label"], "rr replay (test)")
+        self.assertIn("50505", t["command"])
+        self.assertTrue(t["isBackground"])
+
+    def test_rr_replay_task_custom_port(self):
+        t = rr_replay_task("rr replay (x)", 12345)
+        self.assertIn("12345", t["command"])
+
+    def test_build_command_task_structure(self):
+        t = build_command_task("Build (test)", "make images test-image")
+        self.assertEqual(t["label"], "Build (test)")
+        self.assertEqual(t["command"], "make")
+        self.assertEqual(t["args"], ["images", "test-image"])
+        self.assertEqual(t["problemMatcher"], ["$gcc"])
+
+    def test_build_command_task_no_args(self):
+        t = build_command_task("Build", "make")
+        self.assertEqual(t["command"], "make")
+        self.assertEqual(t["args"], [])
+
+
+# ---------------------------------------------------------------------------
+# rr template
+# ---------------------------------------------------------------------------
+
+class TestRrTemplate(unittest.TestCase):
+
+    def test_rr_template_loads(self):
+        tmpl = load_template("rr")
+        self.assertEqual(tmpl["MIMode"], "gdb")
+
+    def test_rr_template_has_miDebuggerServerAddress(self):
+        tmpl = load_template("rr")
+        self.assertIn("$RR_PORT", tmpl["miDebuggerServerAddress"])
+
+    def test_rr_port_substituted_in_config(self):
+        parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
+        cfg = create_launch_config("rr test", parsed, "rr", None, jtreg=False, rr_port=50505)
+        self.assertNotIn("$RR_PORT", json.dumps(cfg.data))
+        self.assertIn("50505", cfg.data["miDebuggerServerAddress"])
+
+    def test_rr_port_custom(self):
+        parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
+        cfg = create_launch_config("rr test", parsed, "rr", None, jtreg=False, rr_port=12345)
+        self.assertIn("12345", cfg.data["miDebuggerServerAddress"])
+
+
+# ---------------------------------------------------------------------------
+# CLI: --rr and --build-command
+# ---------------------------------------------------------------------------
+
+class TestCLIRr(unittest.TestCase):
+
+    def test_rr_flag_creates_rr_template_launch_json(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("my rr", "--rr", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["MIMode"], "gdb")
+            self.assertIn("50505", cfg["miDebuggerServerAddress"])
+
+    def test_rr_flag_default_port(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--rr", "--raw", "--", python)
+            cfg = ws.configs()[0]
+            self.assertIn("50505", cfg["miDebuggerServerAddress"])
+
+    def test_rr_flag_custom_port(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--rr", "12345", "--raw", "--", python)
+            cfg = ws.configs()[0]
+            self.assertIn("12345", cfg["miDebuggerServerAddress"])
+
+    def test_rr_creates_tasks_json(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("my rr", "--rr", "--raw", "--", python)
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            self.assertTrue(tasks_file.exists())
+            tasks = json.loads(tasks_file.read_text())
+            labels = [t["label"] for t in tasks["tasks"]]
+            self.assertIn("rr replay (my rr)", labels)
+
+    def test_rr_sets_prelaunchtask(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("my rr", "--rr", "--raw", "--", python)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "rr replay (my rr)")
+
+    def test_rr_dry_run_no_tasks_json(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--rr", "--dry-run", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((ws.dir / ".vscode" / "tasks.json").exists())
+
+
+class TestCLIBuildCommand(unittest.TestCase):
+
+    def test_build_command_creates_tasks_json(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--build-command", "make images", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            self.assertTrue(tasks_file.exists())
+            tasks = json.loads(tasks_file.read_text())
+            labels = [t["label"] for t in tasks["tasks"]]
+            self.assertIn("Build (x)", labels)
+
+    def test_build_command_task_has_correct_command(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--build-command", "make images test-image", "--raw", "--", python)
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            tasks = json.loads(tasks_file.read_text())
+            task = next(t for t in tasks["tasks"] if t["label"] == "Build (x)")
+            self.assertEqual(task["command"], "make")
+            self.assertEqual(task["args"], ["images", "test-image"])
+
+    def test_build_command_sets_prelaunchtask(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--build-command", "make images", "--raw", "--", python)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "Build (x)")
+
+    def test_build_command_does_not_override_explicit_build_task(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--build-command", "make images", "--build-task", "My Task", "--raw", "--", python)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "My Task")
+
+    def test_build_command_task_replaces_on_second_run(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--build-command", "make images", "--raw", "--", python)
+            ws.run_vsreg("x", "--build-command", "make all", "--raw", "--", python)
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            tasks = json.loads(tasks_file.read_text())
+            build_tasks = [t for t in tasks["tasks"] if t["label"] == "Build (x)"]
+            self.assertEqual(len(build_tasks), 1)
+            self.assertEqual(build_tasks[0]["command"], "make")
+            self.assertEqual(build_tasks[0]["args"], ["all"])
+
+    def test_build_command_dry_run_no_tasks_json(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--build-command", "make images", "--dry-run", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((ws.dir / ".vscode" / "tasks.json").exists())
 
 
 if __name__ == "__main__":

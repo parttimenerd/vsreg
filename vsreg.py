@@ -17,6 +17,8 @@ VSREG_FOLDER = Path(__file__).parent
 CUR_FOLDER = Path.cwd()
 VSCODE_FOLDER = CUR_FOLDER / ".vscode"
 
+RR_DEFAULT_PORT = 50505
+
 
 @dataclass
 class LaunchConfig:
@@ -54,6 +56,70 @@ class LaunchConfigs:
         else:
             self.data["configurations"] = [config.data if c["name"] == config.name() else c for c in
                                            self.data["configurations"]]
+
+
+class TaskConfigs:
+
+    def __init__(self, data: Dict[str, Any]):
+        self.data = data
+
+    def write(self, path: Path):
+        with path.open("w") as f:
+            json.dump(self.data, f, indent=2)
+
+    @staticmethod
+    def read(path: Path) -> 'TaskConfigs':
+        with path.open("r") as f:
+            return TaskConfigs(json.loads(f.read()))
+
+    @staticmethod
+    def empty() -> 'TaskConfigs':
+        return TaskConfigs({"version": "2.0.0", "tasks": []})
+
+    def __contains__(self, label: str) -> bool:
+        return any(t.get("label") == label for t in self.data["tasks"])
+
+    def add(self, task: Dict[str, Any]):
+        label = task["label"]
+        if label not in self:
+            self.data["tasks"].append(task)
+        else:
+            self.data["tasks"] = [task if t.get("label") == label else t for t in self.data["tasks"]]
+
+
+class SettingsConfigs:
+
+    def __init__(self, data: Dict[str, Any]):
+        self.data = data
+
+    def write(self, path: Path):
+        with path.open("w") as f:
+            json.dump(self.data, f, indent=2)
+
+    @staticmethod
+    def read(path: Path) -> 'SettingsConfigs':
+        with path.open("r") as f:
+            return SettingsConfigs(json.loads(f.read()))
+
+    @staticmethod
+    def empty() -> 'SettingsConfigs':
+        return SettingsConfigs({})
+
+    def set(self, key: str, value: Any):
+        self.data[key] = value
+
+
+def detect_clangd_platform(cwd: Path) -> str:
+    """Return relative path like 'build/linux-x86_64-server-fastdebug'.
+
+    Globs build/*/compile_commands.json under cwd; picks most-recently-modified.
+    Raises FileNotFoundError if none found.
+    """
+    candidates = list(cwd.glob("build/*/compile_commands.json"))
+    if not candidates:
+        raise FileNotFoundError(f"No compile_commands.json found under {cwd}/build/*/")
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return str(newest.parent.relative_to(cwd))
 
 
 @dataclass
@@ -135,7 +201,7 @@ def replace(obj: Any, token: str, replacement: str) -> Any:
 
 
 def create_launch_config(label: str, parsed: Parsed, template: str, build_task: Optional[str],
-                         jtreg: bool = True) -> LaunchConfig:
+                         jtreg: bool = True, rr_port: Optional[int] = None) -> LaunchConfig:
     template_json = load_template(template)
     if "$NAME" in template_json["name"]:
         template_json["name"] = template_json["name"].replace("$NAME", label)
@@ -144,6 +210,8 @@ def create_launch_config(label: str, parsed: Parsed, template: str, build_task: 
     template_json = replace(template_json, "$NAME", label)
     template_json = replace(template_json, "$ARCH", platform.machine().lower())
     template_json = replace(template_json, "$VSREG_DIR", str(VSREG_FOLDER))
+    if rr_port is not None:
+        template_json = replace(template_json, "$RR_PORT", str(rr_port))
     template_json["cwd"] = parsed.cwd
     template_json["environment"] = [{"name": name, "value": value} for name, value in
                                     sorted(parsed.env.items(), key=lambda x: x[0])]
@@ -168,9 +236,39 @@ def parse_raw_command(cmd: List[str]) -> Parsed:
     return Parsed(str(cwd), env, program, args)
 
 
-def create_raw_launch_config(label: str, cmd: List[str], template: str, build_task: Optional[str]) -> LaunchConfig:
+def create_raw_launch_config(label: str, cmd: List[str], template: str, build_task: Optional[str],
+                             rr_port: Optional[int] = None) -> LaunchConfig:
     parsed = parse_raw_command(cmd)
-    return create_launch_config(label, parsed, template, build_task, jtreg=False)
+    return create_launch_config(label, parsed, template, build_task, jtreg=False, rr_port=rr_port)
+
+
+def rr_replay_task(label: str, port: int) -> Dict[str, Any]:
+    return {
+        "label": label,
+        "type": "shell",
+        "command": f"rr replay -s {port} -k",
+        "isBackground": True,
+        "problemMatcher": {
+            "pattern": {"regexp": "^$"},
+            "background": {
+                "activeOnStart": True,
+                "beginsPattern": ".",
+                "endsPattern": "^\\[rr\\]",
+            },
+        },
+    }
+
+
+def build_command_task(label: str, command: str) -> Dict[str, Any]:
+    parts = shlex.split(command)
+    program, *task_args = parts
+    return {
+        "label": label,
+        "type": "shell",
+        "command": program,
+        "args": task_args,
+        "problemMatcher": ["$gcc"],
+    }
 
 
 if __name__ == '__main__':
@@ -193,18 +291,55 @@ if __name__ == '__main__':
                         required=False)
     parser.add_argument('-b', '--build-task', metavar='TASK', type=str, help='Task to run before the command',
                         required=False)
+    parser.add_argument('--build-command', metavar='CMD', type=str,
+                        help='Shell command for a build task; creates a tasks.json entry and sets it as preLaunchTask',
+                        required=False)
+    parser.add_argument('--rr', metavar='PORT', nargs='?', const=RR_DEFAULT_PORT, type=int,
+                        help=f'Use rr replay; optionally specify port (default {RR_DEFAULT_PORT}). '
+                             'Sets template to rr and creates a preLaunchTask that starts rr replay.',
+                        required=False)
     parser.add_argument('command', metavar='COMMAND', type=str, nargs='+', help='Command to run')
     args = parser.parse_args()
+
+    build_task = args.build_task
+    rr_port = args.rr
+
+    if rr_port is not None and args.template == 'default':
+        args.template = 'rr'
+
     if args.raw or "make" not in args.command:
-        launch_config = create_raw_launch_config(args.label, args.command, args.template, args.build_task)
+        launch_config = create_raw_launch_config(args.label, args.command, args.template, build_task, rr_port=rr_port)
     else:
         parsed = parse(run_command(args.command))
-        launch_config = create_launch_config(args.label, parsed, args.template, args.build_task)
+        launch_config = create_launch_config(args.label, parsed, args.template, build_task, rr_port=rr_port)
+
     if args.dry_run:
         print(json.dumps(launch_config.data, indent=2))
     else:
         if not VSCODE_FOLDER.exists():
             VSCODE_FOLDER.mkdir(parents=True)
+
+        # Write tasks.json for --build-command or --rr
+        tasks_to_add: List[Dict[str, Any]] = []
+        if args.build_command:
+            bc_label = f"Build ({args.label})"
+            tasks_to_add.append(build_command_task(bc_label, args.build_command))
+            if not build_task:
+                build_task = bc_label
+                launch_config.data["preLaunchTask"] = build_task
+        if rr_port is not None:
+            rr_label = f"rr replay ({args.label})"
+            tasks_to_add.append(rr_replay_task(rr_label, rr_port))
+            if not launch_config.data.get("preLaunchTask"):
+                launch_config.data["preLaunchTask"] = rr_label
+
+        if tasks_to_add:
+            tasks_file = VSCODE_FOLDER / "tasks.json"
+            tasks = TaskConfigs.read(tasks_file) if tasks_file.exists() else TaskConfigs.empty()
+            for t in tasks_to_add:
+                tasks.add(t)
+            tasks.write(tasks_file)
+
         file = VSCODE_FOLDER / "launch.json"
         launch = LaunchConfigs.read(file) if file.exists() else LaunchConfigs.empty()
         if launch_config in launch:
