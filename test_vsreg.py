@@ -18,11 +18,13 @@ from vsreg import (
     LaunchConfig,
     LaunchConfigs,
     Parsed,
+    RemoteConfig,
     SettingsConfigs,
     TaskConfigs,
     build_command_task,
     create_launch_config,
     create_raw_launch_config,
+    create_remote_launch_config,
     detect_clangd_platform,
     load_template,
     parse,
@@ -30,6 +32,7 @@ from vsreg import (
     replace,
     rr_replay_task,
     run_command,
+    ssh_tunnel_task,
 )
 
 VSREG = Path(__file__).parent / "vsreg.py"
@@ -779,6 +782,76 @@ class TestRrTemplate(unittest.TestCase):
         parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
         cfg = create_launch_config("rr test", parsed, "rr", None, jtreg=False, rr_port=12345)
         self.assertIn("12345", cfg.data["miDebuggerServerAddress"])
+
+
+# ---------------------------------------------------------------------------
+# Remote launch config helpers
+# ---------------------------------------------------------------------------
+
+class TestRemoteFunctions(unittest.TestCase):
+
+    def test_ssh_tunnel_task_structure(self):
+        t = ssh_tunnel_task("ssh tunnel (test)", "myhost", 1234, "jbech")
+        self.assertEqual(t["label"], "ssh tunnel (test)")
+        self.assertIn("myhost", t["command"])
+        self.assertIn("1234", t["command"])
+        self.assertIn("jbech", t["command"])
+        self.assertTrue(t["isBackground"])
+
+    def test_ssh_tunnel_task_port_forwarding(self):
+        t = ssh_tunnel_task("x", "host", 5678, "user")
+        self.assertIn("-L", t["command"])
+        self.assertIn("5678", t["command"])
+
+    def test_create_remote_launch_config_gdbserver(self):
+        cfg = create_remote_launch_config(
+            "test", host="myhost", port=1234, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        self.assertEqual(cfg.launch.name(), "test")
+        self.assertIn("myhost", cfg.launch.data["miDebuggerServerAddress"])
+        self.assertIn("1234", cfg.launch.data["miDebuggerServerAddress"])
+        self.assertEqual(cfg.launch.data["program"], "/bin/java")
+        self.assertEqual(cfg.tasks, [])
+        self.assertIsNone(cfg.settings)
+
+    def test_create_remote_launch_config_ssh_adds_task(self):
+        cfg = create_remote_launch_config(
+            "test", host="myhost", port=1234, remote_path="/bin/java",
+            flavor="ssh", user="jbech", build_task=None
+        )
+        self.assertEqual(len(cfg.tasks), 1)
+        self.assertIn("ssh tunnel", cfg.tasks[0]["label"])
+        self.assertEqual(cfg.launch.data["preLaunchTask"], cfg.tasks[0]["label"])
+
+    def test_create_remote_launch_config_ssh_points_to_localhost(self):
+        cfg = create_remote_launch_config(
+            "test", host="myhost", port=1234, remote_path="/bin/java",
+            flavor="ssh", user="jbech", build_task=None
+        )
+        self.assertIn("localhost", cfg.launch.data["miDebuggerServerAddress"])
+
+    def test_create_remote_launch_config_vscode_remote(self):
+        cfg = create_remote_launch_config(
+            "test", host="myhost", port=22, remote_path="/bin/java",
+            flavor="vscode-remote", user="jbech", build_task=None
+        )
+        self.assertNotIn("miDebuggerServerAddress", cfg.launch.data)
+        self.assertEqual(cfg.launch.data["program"], "/bin/java")
+        self.assertIsNotNone(cfg.settings)
+        self.assertIn("remote.SSH.serverInstallPath", cfg.settings)
+
+    def test_create_remote_launch_config_build_task(self):
+        cfg = create_remote_launch_config(
+            "test", host="h", port=1, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task="My Build"
+        )
+        self.assertEqual(cfg.launch.data["preLaunchTask"], "My Build")
+
+    def test_remote_template_loads(self):
+        tmpl = load_template("remote")
+        self.assertIn("$REMOTE_HOST", tmpl["miDebuggerServerAddress"])
+        self.assertIn("$REMOTE_PORT", tmpl["miDebuggerServerAddress"])
 
 
 # ---------------------------------------------------------------------------

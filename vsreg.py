@@ -271,6 +271,87 @@ def build_command_task(label: str, command: str) -> Dict[str, Any]:
     }
 
 
+@dataclass
+class RemoteConfig:
+    launch: LaunchConfig
+    tasks: List[Dict[str, Any]]
+    settings: Optional[Dict[str, Any]]  # extra settings.json keys, or None
+
+
+def ssh_tunnel_task(label: str, host: str, port: int, user: str) -> Dict[str, Any]:
+    return {
+        "label": label,
+        "type": "shell",
+        "command": f"ssh -L {port}:localhost:{port} {user}@{host} -N",
+        "isBackground": True,
+        "problemMatcher": {
+            "pattern": {"regexp": "^$"},
+            "background": {
+                "activeOnStart": True,
+                "beginsPattern": ".",
+                "endsPattern": "^$",
+            },
+        },
+    }
+
+
+def create_remote_launch_config(
+    label: str,
+    host: str,
+    port: int,
+    remote_path: str,
+    flavor: str,
+    user: Optional[str],
+    build_task: Optional[str],
+) -> RemoteConfig:
+    tasks: List[Dict[str, Any]] = []
+    extra_settings: Optional[Dict[str, Any]] = None
+
+    if flavor == "vscode-remote":
+        template_json = load_template("default")
+        template_json["name"] = label
+        template_json = replace(template_json, "$NAME", label)
+        template_json = replace(template_json, "$ARCH", platform.machine().lower())
+        template_json = replace(template_json, "$VSREG_DIR", str(VSREG_FOLDER))
+        template_json["program"] = remote_path
+        template_json["cwd"] = str(Path(remote_path).parent)
+        template_json["args"] = []
+        template_json["environment"] = []
+        if build_task:
+            template_json["preLaunchTask"] = build_task
+        extra_settings = {"remote.SSH.serverInstallPath": {host: "/tmp/vscode-server"}}
+        return RemoteConfig(LaunchConfig(template_json), tasks, extra_settings)
+
+    # gdbserver or ssh: both use remote.json template
+    template_json = load_template("remote")
+    template_json["name"] = label
+    template_json = replace(template_json, "$NAME", label)
+    template_json = replace(template_json, "$ARCH", platform.machine().lower())
+    template_json = replace(template_json, "$VSREG_DIR", str(VSREG_FOLDER))
+
+    if flavor == "ssh":
+        # GDB connects to localhost; SSH tunnel forwards the port
+        template_json = replace(template_json, "$REMOTE_HOST", "localhost")
+        template_json = replace(template_json, "$REMOTE_PORT", str(port))
+        tunnel_label = f"ssh tunnel ({label})"
+        tasks.append(ssh_tunnel_task(tunnel_label, host, port, user or ""))
+        if not build_task:
+            template_json["preLaunchTask"] = tunnel_label
+    else:
+        # gdbserver: GDB connects directly to remote host
+        template_json = replace(template_json, "$REMOTE_HOST", host)
+        template_json = replace(template_json, "$REMOTE_PORT", str(port))
+
+    template_json["program"] = remote_path
+    template_json["cwd"] = str(Path(remote_path).parent)
+    template_json["args"] = []
+    template_json["environment"] = []
+    if build_task:
+        template_json["preLaunchTask"] = build_task
+
+    return RemoteConfig(LaunchConfig(template_json), tasks, extra_settings)
+
+
 if __name__ == '__main__':
     # source https://groups.google.com/g/argparse-users/c/LazV_tEQvQw/m/xJhBOm1qS5IJ
     class MyParser(argparse.ArgumentParser):

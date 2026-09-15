@@ -1,0 +1,27 @@
+{
+  "name": "$NAME",
+  "type": "cppdbg",
+  "request": "launch",
+  "program": "",
+  "args": [],
+  "stopAtEntry": false,
+  "cwd": "",
+  "environment": [],
+  "externalConsole": false,
+  "MIMode": "gdb",
+  "miDebuggerPath": "/usr/bin/gdb",
+  "miDebuggerServerAddress": "$REMOTE_HOST:$REMOTE_PORT",
+  "setupCommands": [
+    {
+      "description": "Set sysroot so symbols resolve correctly",
+      "text": "set sysroot /",
+      "ignoreFailures": false
+    },
+    {
+      "description": "Enable pretty-printing for gdb",
+      "text": "-enable-pretty-printing",
+      "ignoreFailures": true
+    }
+  ],
+  "preLaunchTask": ""
+}
