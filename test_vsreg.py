@@ -892,5 +892,89 @@ class TestCLIBuildCommand(unittest.TestCase):
             self.assertFalse((ws.dir / ".vscode" / "tasks.json").exists())
 
 
+# ---------------------------------------------------------------------------
+# CLI: --clangd
+# ---------------------------------------------------------------------------
+
+class TestCLIClangd(unittest.TestCase):
+
+    def _make_build_dir(self, ws_dir: Path, platform: str) -> Path:
+        p = ws_dir / "build" / platform
+        p.mkdir(parents=True)
+        (p / "compile_commands.json").write_text("[]")
+        return p
+
+    def test_clangd_creates_settings_json(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            result = ws.run_vsreg("--clangd")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings_file = ws.dir / ".vscode" / "settings.json"
+            self.assertTrue(settings_file.exists())
+
+    def test_clangd_writes_compile_commands_dir(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            ws.run_vsreg("--clangd")
+            settings = json.loads((ws.dir / ".vscode" / "settings.json").read_text())
+            args = settings.get("clangd.arguments", [])
+            self.assertTrue(any("compile-commands-dir" in a for a in args))
+            self.assertTrue(any("linux-x86_64-server-fastdebug" in a for a in args))
+
+    def test_clangd_explicit_platform(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            ws.run_vsreg("--clangd", "--platform", "linux-x86_64-server-release")
+            settings = json.loads((ws.dir / ".vscode" / "settings.json").read_text())
+            args = settings.get("clangd.arguments", [])
+            self.assertTrue(any("linux-x86_64-server-release" in a for a in args))
+
+    def test_clangd_merges_existing_settings(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            (ws.dir / ".vscode").mkdir(exist_ok=True)
+            (ws.dir / ".vscode" / "settings.json").write_text(
+                json.dumps({"editor.tabSize": 4})
+            )
+            ws.run_vsreg("--clangd")
+            settings = json.loads((ws.dir / ".vscode" / "settings.json").read_text())
+            self.assertEqual(settings["editor.tabSize"], 4)
+            self.assertIn("clangd.arguments", settings)
+
+    def test_clangd_replaces_existing_clangd_arguments(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            (ws.dir / ".vscode").mkdir(exist_ok=True)
+            (ws.dir / ".vscode" / "settings.json").write_text(
+                json.dumps({"clangd.arguments": ["--old"]})
+            )
+            ws.run_vsreg("--clangd", "--platform", "linux-x86_64-server-fastdebug")
+            settings = json.loads((ws.dir / ".vscode" / "settings.json").read_text())
+            self.assertNotIn("--old", settings["clangd.arguments"])
+
+    def test_clangd_no_build_dir_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg("--clangd")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_clangd_dry_run_prints_json_no_file(self):
+        with TempWorkspace() as ws:
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            result = ws.run_vsreg("--clangd", "--dry-run")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((ws.dir / ".vscode" / "settings.json").exists())
+            parsed = json.loads(result.stdout)
+            self.assertIn("clangd.arguments", parsed)
+
+    def test_clangd_combined_with_launch_config(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            result = ws.run_vsreg("My Debug", "--clangd", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(ws.launch_json.exists())
+            self.assertTrue((ws.dir / ".vscode" / "settings.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
