@@ -1165,5 +1165,542 @@ class TestCLIRemote(unittest.TestCase):
             self.assertTrue(ws.launch_json.exists())
 
 
+# ---------------------------------------------------------------------------
+# parse_raw_command() — edge cases
+# ---------------------------------------------------------------------------
+
+class TestParseRawCommandEdgeCases(unittest.TestCase):
+
+    def test_no_env_prefix(self):
+        python = shutil.which("python3")
+        p = parse_raw_command([python, "-c", "pass"])
+        self.assertEqual(p.env.get("MY_VAR"), None)
+        self.assertEqual(p.args, ["-c", "pass"])
+
+    def test_multiple_env_vars(self):
+        python = shutil.which("python3")
+        p = parse_raw_command(["A=1", "B=2", python])
+        self.assertEqual(p.env.get("A"), "1")
+        self.assertEqual(p.env.get("B"), "2")
+
+    def test_args_after_program(self):
+        python = shutil.which("python3")
+        p = parse_raw_command([python, "script.py", "--flag", "val"])
+        self.assertEqual(p.args, ["script.py", "--flag", "val"])
+
+    def test_env_prefix_included_in_result(self):
+        # parse_raw_command merges os.environ on top of prefix vars, so os.environ wins for
+        # variables that exist in both. The prefix vars are still present for vars not in os.environ.
+        python = shutil.which("python3")
+        p = parse_raw_command(["MY_UNIQUE_VAR_XYZ=hello", python])
+        self.assertEqual(p.env.get("MY_UNIQUE_VAR_XYZ"), "hello")
+
+    def test_cwd_absolute(self):
+        python = shutil.which("python3")
+        p = parse_raw_command([python])
+        self.assertTrue(Path(p.cwd).is_absolute())
+
+
+# ---------------------------------------------------------------------------
+# LaunchConfig / LaunchConfigs — edge cases
+# ---------------------------------------------------------------------------
+
+class TestLaunchConfigEdgeCases(unittest.TestCase):
+
+    def test_name_returns_name_field(self):
+        cfg = LaunchConfig({"name": "hello", "program": "java"})
+        self.assertEqual(cfg.name(), "hello")
+
+    def test_contains_false_on_empty(self):
+        lc = LaunchConfigs.empty()
+        self.assertNotIn(LaunchConfig({"name": "anything"}), lc)
+
+    def test_add_third_config(self):
+        lc = LaunchConfigs.empty()
+        for name in ("a", "b", "c"):
+            lc.add(LaunchConfig({"name": name}))
+        self.assertEqual(len(lc.data["configurations"]), 3)
+
+    def test_replace_updates_data_not_just_name(self):
+        lc = LaunchConfigs.empty()
+        lc.add(LaunchConfig({"name": "x", "program": "old"}))
+        lc.add(LaunchConfig({"name": "x", "program": "new"}))
+        self.assertEqual(lc.data["configurations"][0]["program"], "new")
+
+    def test_written_file_has_version(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            LaunchConfigs.empty().write(path)
+            data = json.loads(path.read_text())
+            self.assertEqual(data["version"], "0.2.0")
+        finally:
+            path.unlink()
+
+    def test_written_file_has_configurations_key(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            LaunchConfigs.empty().write(path)
+            data = json.loads(path.read_text())
+            self.assertIn("configurations", data)
+        finally:
+            path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# TaskConfigs — edge cases
+# ---------------------------------------------------------------------------
+
+class TestTaskConfigsEdgeCases(unittest.TestCase):
+
+    def test_written_file_has_version(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            TaskConfigs.empty().write(path)
+            data = json.loads(path.read_text())
+            self.assertEqual(data["version"], "2.0.0")
+        finally:
+            path.unlink()
+
+    def test_replace_preserves_order(self):
+        tc = TaskConfigs.empty()
+        tc.add({"label": "first", "command": "a"})
+        tc.add({"label": "second", "command": "b"})
+        tc.add({"label": "first", "command": "updated"})
+        labels = [t["label"] for t in tc.data["tasks"]]
+        self.assertEqual(labels, ["first", "second"])
+        self.assertEqual(tc.data["tasks"][0]["command"], "updated")
+
+    def test_add_third_task(self):
+        tc = TaskConfigs.empty()
+        for lbl in ("a", "b", "c"):
+            tc.add({"label": lbl, "command": lbl})
+        self.assertEqual(len(tc.data["tasks"]), 3)
+
+    def test_contains_checks_label_exactly(self):
+        tc = TaskConfigs.empty()
+        tc.add({"label": "build me", "command": "make"})
+        self.assertIn("build me", tc)
+        self.assertNotIn("build", tc)
+        self.assertNotIn("Build me", tc)
+
+
+# ---------------------------------------------------------------------------
+# SettingsConfigs — edge cases
+# ---------------------------------------------------------------------------
+
+class TestSettingsConfigsEdgeCases(unittest.TestCase):
+
+    def test_write_produces_valid_json(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        try:
+            sc = SettingsConfigs.empty()
+            sc.set("a", [1, 2, 3])
+            sc.write(path)
+            data = json.loads(path.read_text())
+            self.assertEqual(data["a"], [1, 2, 3])
+        finally:
+            path.unlink()
+
+    def test_set_non_string_value(self):
+        sc = SettingsConfigs.empty()
+        sc.set("editor.tabSize", 4)
+        self.assertEqual(sc.data["editor.tabSize"], 4)
+
+    def test_set_dict_value(self):
+        sc = SettingsConfigs.empty()
+        sc.set("remote.SSH.serverInstallPath", {"myhost": "/tmp/vs"})
+        self.assertEqual(sc.data["remote.SSH.serverInstallPath"]["myhost"], "/tmp/vs")
+
+    def test_multiple_sets_independent(self):
+        sc = SettingsConfigs.empty()
+        sc.set("x", 1)
+        sc.set("y", 2)
+        sc.set("z", 3)
+        self.assertEqual(len(sc.data), 3)
+
+
+# ---------------------------------------------------------------------------
+# rr_replay_task() — structural details
+# ---------------------------------------------------------------------------
+
+class TestRrReplayTaskDetails(unittest.TestCase):
+
+    def test_type_is_shell(self):
+        t = rr_replay_task("label", 50505)
+        self.assertEqual(t["type"], "shell")
+
+    def test_command_contains_k_flag(self):
+        t = rr_replay_task("label", 50505)
+        self.assertIn("-k", t["command"])
+
+    def test_command_contains_s_flag(self):
+        t = rr_replay_task("label", 50505)
+        self.assertIn("-s", t["command"])
+
+    def test_problem_matcher_has_pattern(self):
+        t = rr_replay_task("label", 50505)
+        pm = t["problemMatcher"]
+        self.assertIn("pattern", pm)
+        self.assertIn("background", pm)
+
+    def test_background_has_required_keys(self):
+        t = rr_replay_task("label", 50505)
+        bg = t["problemMatcher"]["background"]
+        self.assertIn("activeOnStart", bg)
+        self.assertIn("beginsPattern", bg)
+        self.assertIn("endsPattern", bg)
+
+
+# ---------------------------------------------------------------------------
+# build_command_task() — structural details
+# ---------------------------------------------------------------------------
+
+class TestBuildCommandTaskDetails(unittest.TestCase):
+
+    def test_type_is_shell(self):
+        t = build_command_task("Build", "make test")
+        self.assertEqual(t["type"], "shell")
+
+    def test_single_word_command(self):
+        t = build_command_task("Build", "ninja")
+        self.assertEqual(t["command"], "ninja")
+        self.assertEqual(t["args"], [])
+
+    def test_problem_matcher_is_gcc(self):
+        t = build_command_task("Build", "make")
+        self.assertEqual(t["problemMatcher"], ["$gcc"])
+
+    def test_command_with_path(self):
+        t = build_command_task("Build", "/usr/bin/make images")
+        self.assertEqual(t["command"], "/usr/bin/make")
+        self.assertEqual(t["args"], ["images"])
+
+
+# ---------------------------------------------------------------------------
+# create_launch_config() — rr_port=None leaves no $RR_PORT
+# ---------------------------------------------------------------------------
+
+class TestCreateLaunchConfigRrEdge(unittest.TestCase):
+
+    def test_no_rr_port_no_miDebuggerServerAddress_token(self):
+        parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
+        cfg = create_launch_config("x", parsed, "default", None, jtreg=False)
+        self.assertNotIn("$RR_PORT", json.dumps(cfg.data))
+
+    def test_rr_port_none_no_miDebuggerServerAddress(self):
+        parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
+        cfg = create_launch_config("x", parsed, "default", None, jtreg=False, rr_port=None)
+        self.assertNotIn("miDebuggerServerAddress", cfg.data)
+
+    def test_rr_port_set_replaces_in_rr_template(self):
+        parsed = Parsed(cwd=str(Path.cwd()), env={}, program=JAVA_BIN, args=[])
+        cfg = create_launch_config("x", parsed, "rr", None, jtreg=False, rr_port=9999)
+        self.assertIn("9999", cfg.data["miDebuggerServerAddress"])
+        self.assertNotIn("$RR_PORT", json.dumps(cfg.data))
+
+    def test_raw_launch_config_rr_port_substituted(self):
+        python = shutil.which("python3")
+        cfg = create_raw_launch_config("x", [python], "rr", None, rr_port=7777)
+        self.assertIn("7777", cfg.data["miDebuggerServerAddress"])
+
+
+# ---------------------------------------------------------------------------
+# create_remote_launch_config() — thorough token and field checks
+# ---------------------------------------------------------------------------
+
+class TestRemoteConfigDetails(unittest.TestCase):
+
+    def test_gdbserver_no_token_remnants(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        s = json.dumps(cfg.launch.data)
+        self.assertNotIn("$REMOTE_HOST", s)
+        self.assertNotIn("$REMOTE_PORT", s)
+        self.assertNotIn("$NAME", s)
+        self.assertNotIn("$ARCH", s)
+
+    def test_ssh_no_token_remnants(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="ssh", user="u", build_task=None
+        )
+        s = json.dumps(cfg.launch.data)
+        self.assertNotIn("$REMOTE_HOST", s)
+        self.assertNotIn("$REMOTE_PORT", s)
+
+    def test_ssh_tunnel_port_matches_config_port(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=5678, remote_path="/bin/java",
+            flavor="ssh", user="u", build_task=None
+        )
+        self.assertIn("5678", cfg.tasks[0]["command"])
+        self.assertIn("5678", cfg.launch.data["miDebuggerServerAddress"])
+
+    def test_gdbserver_cwd_is_parent_of_remote_path(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/opt/jdk/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        self.assertEqual(cfg.launch.data["cwd"], "/opt/jdk/bin")
+
+    def test_ssh_cwd_is_parent_of_remote_path(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/opt/jdk/bin/java",
+            flavor="ssh", user="u", build_task=None
+        )
+        self.assertEqual(cfg.launch.data["cwd"], "/opt/jdk/bin")
+
+    def test_vscode_remote_cwd_is_parent_of_remote_path(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=22, remote_path="/opt/jdk/bin/java",
+            flavor="vscode-remote", user="u", build_task=None
+        )
+        self.assertEqual(cfg.launch.data["cwd"], "/opt/jdk/bin")
+
+    def test_ssh_with_build_task_overrides_tunnel_as_prelaunchtask(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="ssh", user="u", build_task="My Build"
+        )
+        self.assertEqual(cfg.launch.data["preLaunchTask"], "My Build")
+
+    def test_gdbserver_no_tasks(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        self.assertEqual(cfg.tasks, [])
+
+    def test_vscode_remote_settings_host_key(self):
+        cfg = create_remote_launch_config(
+            "x", host="myserver", port=22, remote_path="/bin/java",
+            flavor="vscode-remote", user="u", build_task=None
+        )
+        self.assertIn("myserver", cfg.settings["remote.SSH.serverInstallPath"])
+
+    def test_vscode_remote_no_tasks(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=22, remote_path="/bin/java",
+            flavor="vscode-remote", user="u", build_task=None
+        )
+        self.assertEqual(cfg.tasks, [])
+
+    def test_gdbserver_empty_environment(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        self.assertEqual(cfg.launch.data["environment"], [])
+
+    def test_gdbserver_empty_args(self):
+        cfg = create_remote_launch_config(
+            "x", host="h", port=1234, remote_path="/bin/java",
+            flavor="gdbserver", user=None, build_task=None
+        )
+        self.assertEqual(cfg.launch.data["args"], [])
+
+
+# ---------------------------------------------------------------------------
+# detect_clangd_platform() — depth constraint
+# ---------------------------------------------------------------------------
+
+class TestClangdDetectDepth(unittest.TestCase):
+
+    def test_only_first_level_under_build(self):
+        """build/linux/subdir/compile_commands.json should NOT be picked up."""
+        with tempfile.TemporaryDirectory() as d:
+            deep = Path(d) / "build" / "linux" / "subdir"
+            deep.mkdir(parents=True)
+            (deep / "compile_commands.json").write_text("[]")
+            with self.assertRaises(FileNotFoundError):
+                detect_clangd_platform(Path(d))
+
+    def test_returns_relative_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            bd = Path(d) / "build" / "linux-server"
+            bd.mkdir(parents=True)
+            (bd / "compile_commands.json").write_text("[]")
+            result = detect_clangd_platform(Path(d))
+            self.assertFalse(result.startswith("/"))
+            self.assertTrue(result.startswith("build/"))
+
+
+# ---------------------------------------------------------------------------
+# CLI error paths
+# ---------------------------------------------------------------------------
+
+class TestCLIErrors(unittest.TestCase):
+
+    def test_no_args_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg()
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_label_without_command_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg("MyLabel")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_invalid_template_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--template", "no_such_template", "--raw", "--", python)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_remote_missing_host_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg("remote", "Label", "--port", "1234", "--remote-path", "/bin/java")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_remote_missing_port_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg("remote", "Label", "--host", "h", "--remote-path", "/bin/java")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_remote_missing_remote_path_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg("remote", "Label", "--host", "h", "--port", "1234")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_remote_ssh_without_user_exits_nonzero(self):
+        with TempWorkspace() as ws:
+            result = ws.run_vsreg(
+                "remote", "Label", "--host", "h", "--port", "1234",
+                "--remote-path", "/bin/java", "--flavor", "ssh"
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+
+# ---------------------------------------------------------------------------
+# CLI: --rr interaction with --build-task and --template
+# ---------------------------------------------------------------------------
+
+class TestCLIRrInteractions(unittest.TestCase):
+
+    def test_rr_with_explicit_build_task_preserves_build_task(self):
+        """--build-task wins over the auto-generated rr preLaunchTask."""
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--rr", "--build-task", "My Build", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "My Build")
+
+    def test_rr_with_explicit_template_keeps_template(self):
+        """--template lldb_only should not be overridden to 'rr' when --rr is also given."""
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("x", "--rr", "--template", "lldb_only", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg.get("MIMode"), "lldb")
+
+    def test_rr_and_build_command_both_written_to_tasks(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            ws.run_vsreg("x", "--rr", "--build-command", "make images", "--raw", "--", python)
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            tasks = json.loads(tasks_file.read_text())
+            labels = [t["label"] for t in tasks["tasks"]]
+            self.assertIn("Build (x)", labels)
+            self.assertIn("rr replay (x)", labels)
+
+
+# ---------------------------------------------------------------------------
+# CLI: remote replaces / merges
+# ---------------------------------------------------------------------------
+
+class TestCLIRemoteIdempotence(unittest.TestCase):
+
+    def _run_remote(self, ws, *args):
+        return ws.run_vsreg("remote", *args)
+
+    def test_remote_replaces_existing_config(self):
+        with TempWorkspace() as ws:
+            self._run_remote(ws, "My Remote", "--host", "h1", "--port", "1234", "--remote-path", "/bin/java")
+            self._run_remote(ws, "My Remote", "--host", "h2", "--port", "5678", "--remote-path", "/bin/java")
+            self.assertEqual(len(ws.configs()), 1)
+            cfg = ws.configs()[0]
+            self.assertIn("h2", cfg["miDebuggerServerAddress"])
+
+    def test_remote_ssh_merges_with_existing_tasks(self):
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            # First create a task via flat CLI
+            ws.run_vsreg("existing", "--build-command", "make images", "--raw", "--", python)
+            # Then add a remote SSH config
+            self._run_remote(
+                ws, "My SSH", "--host", "h", "--port", "1234",
+                "--remote-path", "/bin/java", "--flavor", "ssh", "--user", "u"
+            )
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            tasks = json.loads(tasks_file.read_text())
+            labels = [t["label"] for t in tasks["tasks"]]
+            self.assertIn("Build (existing)", labels)
+            self.assertIn("ssh tunnel (My SSH)", labels)
+
+    def test_remote_vscode_merges_with_existing_settings(self):
+        with TempWorkspace() as ws:
+            (ws.dir / ".vscode").mkdir()
+            (ws.dir / ".vscode" / "settings.json").write_text(json.dumps({"editor.tabSize": 2}))
+            self._run_remote(
+                ws, "x", "--host", "h", "--port", "22",
+                "--remote-path", "/bin/java", "--flavor", "vscode-remote", "--user", "u"
+            )
+            settings = json.loads((ws.dir / ".vscode" / "settings.json").read_text())
+            self.assertEqual(settings["editor.tabSize"], 2)
+            self.assertIn("remote.SSH.serverInstallPath", settings)
+
+    def test_remote_adds_second_config_to_launch_json(self):
+        with TempWorkspace() as ws:
+            self._run_remote(ws, "First", "--host", "h", "--port", "1234", "--remote-path", "/bin/java")
+            self._run_remote(ws, "Second", "--host", "h", "--port", "5678", "--remote-path", "/bin/java")
+            self.assertEqual(len(ws.configs()), 2)
+
+
+# ---------------------------------------------------------------------------
+# CLI: clangd + launch config combined dry-run
+# ---------------------------------------------------------------------------
+
+class TestCLIClangdDryRunCombined(unittest.TestCase):
+
+    def _make_build_dir(self, ws_dir, platform):
+        p = ws_dir / "build" / platform
+        p.mkdir(parents=True)
+        (p / "compile_commands.json").write_text("[]")
+
+    def test_clangd_dry_run_combined_prints_both(self):
+        """--clangd --dry-run with LABEL+COMMAND prints settings JSON then launch JSON."""
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            self._make_build_dir(ws.dir, "linux-x86_64-server-fastdebug")
+            result = ws.run_vsreg("x", "--clangd", "--dry-run", "--raw", "--", python)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # Two JSON objects in stdout — parse both
+            out = result.stdout.strip()
+            # Split on }\n{ boundary
+            decoder = json.JSONDecoder()
+            objs = []
+            idx = 0
+            while idx < len(out):
+                while idx < len(out) and out[idx] in " \n\r\t":
+                    idx += 1
+                if idx >= len(out):
+                    break
+                obj, end = decoder.raw_decode(out, idx)
+                objs.append(obj)
+                idx = end
+            self.assertEqual(len(objs), 2)
+            keys = {k for o in objs for k in o}
+            self.assertIn("clangd.arguments", keys)
+            self.assertIn("name", keys)
+
+
 if __name__ == "__main__":
     unittest.main()
