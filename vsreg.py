@@ -457,7 +457,19 @@ if __name__ == '__main__':
                              'auto-detected from build/*/compile_commands.json if omitted',
                         required=False)
     parser.add_argument('command', metavar='COMMAND', type=str, nargs='*', help='Command to run')
-    args = parser.parse_args()
+    # Split on the first '--' separator so that command arguments starting with
+    # '-' are not mistaken for vsreg flags.  Argparse with nargs='?' + nargs='*'
+    # does not consume '--' reliably on Python < 3.13.
+    if '--' in sys.argv[1:]:
+        sep = sys.argv[1:].index('--') + 1  # index in sys.argv
+        vsreg_argv = sys.argv[1:sep]
+        command_argv = sys.argv[sep + 1:]
+    else:
+        vsreg_argv = sys.argv[1:]
+        command_argv = []
+    args = parser.parse_args(vsreg_argv)
+    if command_argv:
+        args.command = command_argv
 
     if not args.clangd and (args.label is None or not args.command):
         parser.error("LABEL and COMMAND are required unless --clangd is used alone")
