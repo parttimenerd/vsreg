@@ -1049,5 +1049,121 @@ class TestCLIClangd(unittest.TestCase):
             self.assertTrue((ws.dir / ".vscode" / "settings.json").exists())
 
 
+# ---------------------------------------------------------------------------
+# CLI: remote subcommand
+# ---------------------------------------------------------------------------
+
+class TestCLIRemote(unittest.TestCase):
+
+    def _run_remote(self, ws: TempWorkspace, *args: str) -> subprocess.CompletedProcess:
+        return ws.run_vsreg("remote", *args)
+
+    def test_remote_gdbserver_creates_launch_json(self):
+        with TempWorkspace() as ws:
+            result = self._run_remote(
+                ws, "My Remote", "--host", "build-server", "--port", "1234",
+                "--remote-path", "/home/user/jdk/bin/java"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(ws.launch_json.exists())
+
+    def test_remote_gdbserver_miDebuggerServerAddress(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My Remote", "--host", "build-server", "--port", "1234",
+                "--remote-path", "/home/user/jdk/bin/java"
+            )
+            cfg = ws.configs()[0]
+            self.assertIn("build-server", cfg["miDebuggerServerAddress"])
+            self.assertIn("1234", cfg["miDebuggerServerAddress"])
+
+    def test_remote_gdbserver_program(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My Remote", "--host", "h", "--port", "9999",
+                "--remote-path", "/opt/jdk/bin/java"
+            )
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["program"], "/opt/jdk/bin/java")
+
+    def test_remote_ssh_creates_tasks_json(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My SSH", "--host", "build-server", "--port", "1234",
+                "--remote-path", "/bin/java", "--flavor", "ssh", "--user", "jbech"
+            )
+            tasks_file = ws.dir / ".vscode" / "tasks.json"
+            self.assertTrue(tasks_file.exists())
+            tasks = json.loads(tasks_file.read_text())
+            labels = [t["label"] for t in tasks["tasks"]]
+            self.assertIn("ssh tunnel (My SSH)", labels)
+
+    def test_remote_ssh_prelaunchtask_is_tunnel(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My SSH", "--host", "build-server", "--port", "1234",
+                "--remote-path", "/bin/java", "--flavor", "ssh", "--user", "jbech"
+            )
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "ssh tunnel (My SSH)")
+
+    def test_remote_ssh_localhost_address(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My SSH", "--host", "build-server", "--port", "1234",
+                "--remote-path", "/bin/java", "--flavor", "ssh", "--user", "jbech"
+            )
+            cfg = ws.configs()[0]
+            self.assertIn("localhost", cfg["miDebuggerServerAddress"])
+
+    def test_remote_vscode_no_miDebuggerServerAddress(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My VSCode", "--host", "build-server", "--port", "22",
+                "--remote-path", "/bin/java", "--flavor", "vscode-remote", "--user", "jbech"
+            )
+            cfg = ws.configs()[0]
+            self.assertNotIn("miDebuggerServerAddress", cfg)
+
+    def test_remote_vscode_writes_settings(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My VSCode", "--host", "build-server", "--port", "22",
+                "--remote-path", "/bin/java", "--flavor", "vscode-remote", "--user", "jbech"
+            )
+            settings_file = ws.dir / ".vscode" / "settings.json"
+            self.assertTrue(settings_file.exists())
+            settings = json.loads(settings_file.read_text())
+            self.assertIn("remote.SSH.serverInstallPath", settings)
+
+    def test_remote_build_task(self):
+        with TempWorkspace() as ws:
+            self._run_remote(
+                ws, "My Remote", "--host", "h", "--port", "1234",
+                "--remote-path", "/bin/java", "--build-task", "My Build"
+            )
+            cfg = ws.configs()[0]
+            self.assertEqual(cfg["preLaunchTask"], "My Build")
+
+    def test_remote_dry_run_prints_json_no_file(self):
+        with TempWorkspace() as ws:
+            result = self._run_remote(
+                ws, "My Remote", "--host", "h", "--port", "1234",
+                "--remote-path", "/bin/java", "--dry-run"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(ws.launch_json.exists())
+            parsed = json.loads(result.stdout)
+            self.assertIn("name", parsed)
+
+    def test_existing_flat_cli_still_works(self):
+        """Ensure the legacy LABEL -- COMMAND invocation is unbroken."""
+        with TempWorkspace() as ws:
+            python = shutil.which("python3")
+            result = ws.run_vsreg("My Debug", "--raw", "--", python, "-c", "pass")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(ws.launch_json.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

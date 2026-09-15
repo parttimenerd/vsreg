@@ -360,7 +360,76 @@ if __name__ == '__main__':
             self.print_help()
             sys.exit(2)
 
+    # ------------------------------------------------------------------ #
+    # remote subcommand                                                    #
+    # ------------------------------------------------------------------ #
+    if len(sys.argv) > 1 and sys.argv[1] == 'remote':
+        rparser = MyParser(
+            prog='vsreg.py remote',
+            description='Create a remote debug launch config (gdbserver / SSH / VS Code Remote SSH)',
+        )
+        rparser.add_argument('label', metavar='LABEL', type=str, help='Label of the config')
+        rparser.add_argument('--host', required=True, help='Remote host name or IP')
+        rparser.add_argument('--port', required=True, type=int, help='gdbserver / SSH port')
+        rparser.add_argument('--remote-path', required=True, metavar='PATH',
+                             help='Absolute path to the binary on the remote host')
+        rparser.add_argument('--flavor', choices=['gdbserver', 'ssh', 'vscode-remote'],
+                             default='gdbserver', help='Remote debug flavor (default: gdbserver)')
+        rparser.add_argument('--user', metavar='USER',
+                             help='SSH username (required for ssh flavor)')
+        rparser.add_argument('--build-task', metavar='TASK',
+                             help='Task label to run before the debug session')
+        rparser.add_argument('-d', '--dry-run', action='store_true',
+                             help='Print config(s) without writing files')
+        rargs = rparser.parse_args(sys.argv[2:])
 
+        if rargs.flavor == 'ssh' and not rargs.user:
+            rparser.error("--user is required for --flavor ssh")
+
+        rcfg = create_remote_launch_config(
+            label=rargs.label,
+            host=rargs.host,
+            port=rargs.port,
+            remote_path=rargs.remote_path,
+            flavor=rargs.flavor,
+            user=rargs.user,
+            build_task=rargs.build_task,
+        )
+
+        if rargs.dry_run:
+            print(json.dumps(rcfg.launch.data, indent=2))
+        else:
+            if not VSCODE_FOLDER.exists():
+                VSCODE_FOLDER.mkdir(parents=True)
+
+            if rcfg.settings:
+                settings_file = VSCODE_FOLDER / "settings.json"
+                settings = SettingsConfigs.read(settings_file) if settings_file.exists() else SettingsConfigs.empty()
+                for key, value in rcfg.settings.items():
+                    settings.set(key, value)
+                settings.write(settings_file)
+
+            if rcfg.tasks:
+                tasks_file = VSCODE_FOLDER / "tasks.json"
+                tasks = TaskConfigs.read(tasks_file) if tasks_file.exists() else TaskConfigs.empty()
+                for t in rcfg.tasks:
+                    tasks.add(t)
+                tasks.write(tasks_file)
+
+            file = VSCODE_FOLDER / "launch.json"
+            launch = LaunchConfigs.read(file) if file.exists() else LaunchConfigs.empty()
+            if rcfg.launch in launch:
+                print(f"Replacing launch config {rcfg.launch.name()}")
+            else:
+                print(f"Adding launch config {rcfg.launch.name()}")
+            launch.add(rcfg.launch)
+            launch.write(file)
+
+        sys.exit(0)
+
+    # ------------------------------------------------------------------ #
+    # flat CLI (existing behaviour: LABEL [flags] -- COMMAND)             #
+    # ------------------------------------------------------------------ #
     parser = MyParser(description='Create a debug launch config for a JTREG test run or a command execution')
     parser.add_argument('label', metavar='LABEL', type=str, nargs='?', default=None,
                         help='Label of the config (optional when --clangd used alone)')
@@ -406,7 +475,7 @@ if __name__ == '__main__':
                 sys.exit(1)
         clangd_settings = {"clangd.arguments": [f"--compile-commands-dir={platform_dir}"]}
 
-    # --- launch config (only when LABEL+COMMAND present) ---
+    # --- launch config ---
     launch_config = None
     if args.label and args.command:
         build_task = args.build_task
